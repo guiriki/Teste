@@ -1,45 +1,37 @@
-from crewai import Agent, Task, Crew
-from langchain_community.tools import DuckDuckGoSearchRun
-from langchain_openai import ChatOpenAI
+import requests
+from duckduckgo_search import DDGS
+from sumy.parsers.html import HtmlParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.lsa import LsaSummarizer
 
-# Ferramenta de busca
-search_tool = DuckDuckGoSearchRun()
 
-# Agente de busca de artigos
-search_agent = Agent(
-    role="Buscador de Artigos",
-    goal="Buscar artigos relevantes sobre o tema informado",
-    tools=[search_tool],
-    verbose=True
-)
+def buscar_e_resumir_artigos(tema: str, num_artigos: int = 3):
+    """Busca links de artigos e retorna um pequeno resumo de cada um."""
+    resultados = []
+    with DDGS() as ddgs:
+        for r in ddgs.text(tema, max_results=num_artigos):
+            resultados.append(r.get("href"))
+            if len(resultados) >= num_artigos:
+                break
 
-# Agente de resumo
-summary_llm = ChatOpenAI(temperature=0, model="gpt-3.5-turbo")  # Ou outro modelo disponível
-summary_agent = Agent(
-    role="Resumidor de Artigos",
-    goal="Resumir artigos encontrados de forma objetiva e clara",
-    llm=summary_llm,
-    verbose=True
-)
-
-# Task pipeline
-def buscar_e_resumir_artigos(tema):
-    # 1. Buscar links de artigos
-    resultado_busca = search_agent.run(f"artigos sobre {tema}")
-    links = [item['href'] for item in resultado_busca[:3]]  # Limitar a 3 artigos
-
-    # 2. Para cada link, gerar um resumo
     resumos = []
-    for link in links:
-        texto = search_tool.run(link)  # Busca texto do artigo
-        resumo = summary_agent.run(f"Resuma este artigo: {texto}")
-        resumos.append({'link': link, 'resumo': resumo})
-
+    for link in resultados:
+        try:
+            resp = requests.get(link, timeout=10)
+            resp.raise_for_status()
+            parser = HtmlParser.from_string(
+                resp.text, link, Tokenizer("portuguese"))
+            summarizer = LsaSummarizer()
+            sentences = summarizer(parser.document, 3)
+            resumo = " ".join(str(s) for s in sentences)
+        except Exception as exc:
+            resumo = f"Erro ao processar artigo: {exc}"
+        resumos.append({"link": link, "resumo": resumo})
     return resumos
 
-# Exemplo de uso
+
 if __name__ == "__main__":
     tema = "inteligência artificial"
     resumos = buscar_e_resumir_artigos(tema)
-    for idx, item in enumerate(resumos):
-        print(f"Artigo {idx+1}: {item['link']}\nResumo: {item['resumo']}\n")
+    for idx, item in enumerate(resumos, 1):
+        print(f"Artigo {idx}: {item['link']}\nResumo: {item['resumo']}\n")
